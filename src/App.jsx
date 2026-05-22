@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { CalendarDays, CheckCircle2, Plus, Trash2, Tag, X } from "lucide-react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { CalendarDays, CheckCircle2, Download, Plus, Trash2, Tag, Upload, X } from "lucide-react";
 
 const STORAGE_KEY = "weekly-schedule-app-data-v3";
 const priorityWeight = { S: 4, A: 3, B: 2, C: 1 };
@@ -197,7 +197,8 @@ const styles = {
   gridAuto: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(135px, 1fr))", gap: 12 },
   formGrid: { display: "grid", gridTemplateColumns: "2fr 1fr .7fr 1.1fr .8fr 1fr auto", gap: 10, alignItems: "center" },
   primary: { border: "none", borderRadius: 14, background: "#172033", color: "#fff", padding: "11px 16px", fontSize: 14, fontWeight: 700, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 8, justifyContent: "center" },
-  smallButton: { border: "none", borderRadius: 12, background: "#f1f5f9", color: "#475569", padding: "8px 10px", fontSize: 13, cursor: "pointer" },
+  smallButton: { border: "none", borderRadius: 12, background: "#f1f5f9", color: "#475569", padding: "8px 10px", fontSize: 13, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6, justifyContent: "center" },
+  buttonRow: { display: "flex", flexWrap: "wrap", gap: 8 },
   dayButtons: { display: "flex", flexWrap: "wrap", gap: 8 },
   dayButton: { border: "none", borderRadius: 14, padding: "10px 14px", fontSize: 14, fontWeight: 700, cursor: "pointer" },
   quadrantGrid: { display: "grid", gridTemplateColumns: "80px 1fr 1fr", gridTemplateRows: "auto 1fr 1fr auto", gap: 10 },
@@ -344,6 +345,7 @@ export default function WeeklyScheduleApp() {
   const [selectedDate, setSelectedDate] = useState(saved?.selectedDate || planningDays[0] || defaultStart);
   const [selectedTaskId, setSelectedTaskId] = useState(null);
   const [form, setForm] = useState({ title: "", type: "", priority: "A", deadline: planningEnd, estimate: 1, daily: false, subtasksText: "" });
+  const importInputRef = useRef(null);
 
   useEffect(() => {
     setAvailability((previous) => {
@@ -439,6 +441,92 @@ export default function WeeklyScheduleApp() {
     setAvailability((previous) => ({ ...previous, [day]: Number(value) || 0 }));
   };
 
+
+  const exportData = () => {
+    const backup = {
+      appName: "weekly-schedule-app",
+      storageKey: STORAGE_KEY,
+      exportedAt: new Date().toISOString(),
+      planningStart,
+      planningEnd,
+      selectedDate,
+      tasks,
+      availability,
+    };
+
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `weekly-schedule-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const openImportFilePicker = () => {
+    importInputRef.current?.click();
+  };
+
+  const importData = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const confirmed = window.confirm("导入备份会覆盖当前浏览器里的计划数据，确定继续吗？");
+    if (!confirmed) {
+      event.target.value = "";
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (readerEvent) => {
+      try {
+        const imported = JSON.parse(readerEvent.target.result);
+
+        if (!imported || typeof imported !== "object" || !Array.isArray(imported.tasks)) {
+          alert("导入失败：这个文件不是有效的 weekly schedule 备份文件。");
+          return;
+        }
+
+        const nextPlanningStart = imported.planningStart || defaultStart;
+        const nextPlanningEnd = imported.planningEnd || defaultEnd;
+        const nextDays = buildDateRange(nextPlanningStart, nextPlanningEnd);
+        const nextAvailability = imported.availability && typeof imported.availability === "object" ? imported.availability : makeDefaultAvailability(nextDays);
+        const nextSelectedDate = nextDays.includes(imported.selectedDate) ? imported.selectedDate : nextDays[0] || nextPlanningStart;
+
+        setPlanningStart(nextPlanningStart);
+        setPlanningEnd(nextPlanningEnd);
+        setSelectedDate(nextSelectedDate);
+        setTasks(imported.tasks);
+        setAvailability(nextAvailability);
+        setSelectedTaskId(null);
+
+        saveData({
+          planningStart: nextPlanningStart,
+          planningEnd: nextPlanningEnd,
+          selectedDate: nextSelectedDate,
+          tasks: imported.tasks,
+          availability: nextAvailability,
+        });
+
+        alert("导入成功！备份数据已经恢复到当前浏览器。");
+      } catch (error) {
+        console.warn("导入数据失败：", error);
+        alert("导入失败：文件内容无法读取，请确认选择的是 JSON 备份文件。");
+      } finally {
+        event.target.value = "";
+      }
+    };
+
+    reader.onerror = () => {
+      alert("导入失败：浏览器无法读取这个文件。");
+      event.target.value = "";
+    };
+
+    reader.readAsText(file);
+  };
+
   const clearSavedData = () => {
     if (!window.confirm("确定要清空所有任务和本地保存数据吗？")) return;
     window.localStorage.removeItem(STORAGE_KEY);
@@ -465,7 +553,12 @@ export default function WeeklyScheduleApp() {
             <div style={{ color: "#64748b", fontSize: 14 }}>完成进度</div>
             <div style={{ fontSize: 34, fontWeight: 800 }}>{completionStats.rate}%</div>
             <div style={{ color: "#64748b", fontSize: 13, marginBottom: 10 }}>{completionStats.done}/{completionStats.total}</div>
-            <button style={styles.smallButton} onClick={clearSavedData}>清空本地数据</button>
+            <input ref={importInputRef} type="file" accept="application/json,.json" style={{ display: "none" }} onChange={importData} />
+            <div style={styles.buttonRow}>
+              <button style={styles.smallButton} onClick={exportData}><Download size={14} />导出数据</button>
+              <button style={styles.smallButton} onClick={openImportFilePicker}><Upload size={14} />导入数据</button>
+              <button style={styles.smallButton} onClick={clearSavedData}>清空本地数据</button>
+            </div>
           </div>
         </header>
 
