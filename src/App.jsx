@@ -4,6 +4,8 @@ import { CalendarDays, CheckCircle2, Download, Plus, Trash2, Tag, Upload, X } fr
 const STORAGE_KEY = "weekly-schedule-app-data-v3";
 const priorityWeight = { S: 4, A: 3, B: 2, C: 1 };
 const weekdays = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+const allWeekdayIndexes = [0, 1, 2, 3, 4, 5, 6];
+const shortWeekdays = ["日", "一", "二", "三", "四", "五", "六"];
 
 function toISODate(date) {
   const year = date.getFullYear();
@@ -87,7 +89,30 @@ function saveData(data) {
   }
 }
 
+function getTaskRepeatDays(task) {
+  if (!task.daily) return [];
+  if (Array.isArray(task.repeatDays) && task.repeatDays.length > 0) {
+    return task.repeatDays;
+  }
+  return allWeekdayIndexes;
+}
+
+function isRepeatTaskVisibleOnDate(task, dateISO) {
+  if (!task.daily) return true;
+  const date = parseDate(dateISO);
+  if (!date) return false;
+  return getTaskRepeatDays(task).includes(date.getDay());
+}
+
+function repeatDaysText(task) {
+  if (!task.daily) return "";
+  const repeatDays = getTaskRepeatDays(task);
+  if (repeatDays.length === 7) return "每日";
+  return `每周${repeatDays.map((day) => shortWeekdays[day]).join("、")}`;
+}
+
 function isVisibleOnDate(task, dateISO) {
+  if (!isRepeatTaskVisibleOnDate(task, dateISO)) return false;
   if (!task.deadline) return true;
   return dateISO <= task.deadline;
 }
@@ -141,7 +166,7 @@ function buildSuggestedSchedule(tasks, availability, days) {
     if (task.daily) {
       validDays.forEach((day) => {
         if (!isDailyDoneOnDate(task, day)) {
-          schedule[day].push({ ...task, instanceDate: day, note: "每日任务" });
+          schedule[day].push({ ...task, instanceDate: day, note: repeatDaysText(task) });
         }
       });
       return;
@@ -221,15 +246,15 @@ function TaskCard({ task, dateISO, onToggleDone, onRemove, onOpen }) {
         <div style={styles.taskMeta}>
           <Tag size={16} />
           {task.type || "未分类"}
-          {task.daily ? " · 每日" : ""}
+          {task.daily ? ` · ${repeatDaysText(task)}` : ""}
         </div>
         <span style={styles.priority}>{task.priority}</span>
       </div>
       <div style={{ fontSize: 15, fontWeight: 700, lineHeight: 1.35, margin: "8px 0 6px" }}>{task.title}</div>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 10, color: "#64748b", fontSize: 12 }}>
-        <span>{task.daily ? "今日待完成" : deadlineText(task, dateISO)} · {task.estimate}h · 细分 {finished}/{subtasks.length}</span>
+        <span>{task.daily ? `${repeatDaysText(task)}待完成` : deadlineText(task, dateISO)} · {task.estimate}h · 细分 {finished}/{subtasks.length}</span>
         <span style={{ display: "flex", gap: 6 }}>
-          <button style={styles.iconButton} onClick={(event) => { event.stopPropagation(); onToggleDone(task.id, dateISO); }} title={task.daily ? "完成今天" : "完成任务"}>
+          <button style={styles.iconButton} onClick={(event) => { event.stopPropagation(); onToggleDone(task.id, dateISO); }} title={task.daily ? "完成这一天" : "完成任务"}>
             <CheckCircle2 size={16} />
           </button>
           <button style={styles.iconButton} onClick={(event) => { event.stopPropagation(); onRemove(task.id); }} title="删除">
@@ -280,7 +305,7 @@ function QuadrantChart({ dateISO, tasks, onToggleDone, onRemove, onOpenTask }) {
       <div style={styles.sectionHeader}>
         <div>
           <h2 style={styles.sectionTitle}>{formatDate(dateISO)} 四象限任务图</h2>
-          <p style={styles.sectionText}>普通任务会从规划开始显示到截止日；每日任务每天独立完成。</p>
+          <p style={styles.sectionText}>普通任务会从规划开始显示到截止日；重复任务只在选中的周几出现，并按日期独立完成。</p>
         </div>
         <div style={styles.badge}>当前 {activeTasks.length} 个任务</div>
       </div>
@@ -312,7 +337,7 @@ function TaskDetailModal({ task, onClose, onToggleSubtask }) {
           <div>
             <div style={styles.taskMeta}><Tag size={16} />{task.type || "未分类"} · {task.priority}级</div>
             <h2 style={{ margin: "8px 0 4px", fontSize: 26 }}>{task.title}</h2>
-            <p style={{ margin: 0, color: "#64748b" }}>截止：{formatDate(task.deadline)} · 预计 {task.estimate}h · 细分 {finished}/{subtasks.length}</p>
+            <p style={{ margin: 0, color: "#64748b" }}>截止：{formatDate(task.deadline)} · 预计 {task.estimate}h · {task.daily ? `${repeatDaysText(task)} · ` : ""}细分 {finished}/{subtasks.length}</p>
           </div>
           <button style={styles.iconButton} onClick={onClose}><X size={18} /></button>
         </div>
@@ -344,7 +369,7 @@ export default function WeeklyScheduleApp() {
   const [availability, setAvailability] = useState(saved?.availability || makeDefaultAvailability(planningDays));
   const [selectedDate, setSelectedDate] = useState(saved?.selectedDate || planningDays[0] || defaultStart);
   const [selectedTaskId, setSelectedTaskId] = useState(null);
-  const [form, setForm] = useState({ title: "", type: "", priority: "A", deadline: planningEnd, estimate: 1, daily: false, subtasksText: "" });
+  const [form, setForm] = useState({ title: "", type: "", priority: "A", deadline: planningEnd, estimate: 1, daily: false, repeatDays: allWeekdayIndexes, subtasksText: "" });
   const importInputRef = useRef(null);
 
   useEffect(() => {
@@ -385,6 +410,10 @@ export default function WeeklyScheduleApp() {
 
   const addTask = () => {
     if (!form.title.trim()) return;
+    if (form.daily && (!form.repeatDays || form.repeatDays.length === 0)) {
+      alert("请选择至少一个重复的星期。");
+      return;
+    }
     const subtasks = form.subtasksText
       .split("\n")
       .map((item) => item.trim())
@@ -401,13 +430,14 @@ export default function WeeklyScheduleApp() {
         deadline: form.deadline,
         estimate: Number(form.estimate) || 1,
         daily: form.daily,
+        repeatDays: form.daily ? form.repeatDays : [],
         done: false,
         completedDates: [],
         subtasks,
       },
     ]);
 
-    setForm({ title: "", type: "", priority: "A", deadline: planningEnd, estimate: 1, daily: false, subtasksText: "" });
+    setForm({ title: "", type: "", priority: "A", deadline: planningEnd, estimate: 1, daily: false, repeatDays: allWeekdayIndexes, subtasksText: "" });
   };
 
   const removeTask = (id) => {
@@ -439,6 +469,17 @@ export default function WeeklyScheduleApp() {
 
   const updateAvailability = (day, value) => {
     setAvailability((previous) => ({ ...previous, [day]: Number(value) || 0 }));
+  };
+
+  const toggleRepeatDay = (weekdayIndex) => {
+    setForm((previous) => {
+      const current = previous.repeatDays || [];
+      const exists = current.includes(weekdayIndex);
+      const next = exists
+        ? current.filter((day) => day !== weekdayIndex)
+        : [...current, weekdayIndex].sort((a, b) => a - b);
+      return { ...previous, repeatDays: next };
+    });
   };
 
 
@@ -537,7 +578,7 @@ export default function WeeklyScheduleApp() {
     setAvailability(makeDefaultAvailability(days));
     setSelectedDate(defaultStart);
     setSelectedTaskId(null);
-    setForm({ title: "", type: "", priority: "A", deadline: defaultEnd, estimate: 1, daily: false, subtasksText: "" });
+    setForm({ title: "", type: "", priority: "A", deadline: defaultEnd, estimate: 1, daily: false, repeatDays: allWeekdayIndexes, subtasksText: "" });
   };
 
   return (
@@ -588,14 +629,46 @@ export default function WeeklyScheduleApp() {
               <select style={styles.input} value={form.priority} onChange={(event) => setForm({ ...form, priority: event.target.value })}><option>S</option><option>A</option><option>B</option><option>C</option></select>
               <input style={styles.input} type="date" value={form.deadline} onChange={(event) => setForm({ ...form, deadline: event.target.value })} />
               <input style={styles.input} type="number" step="0.5" min="0.1" value={form.estimate} onChange={(event) => setForm({ ...form, estimate: event.target.value })} />
-              <label style={{ display: "flex", alignItems: "center", gap: 8, color: "#475569" }}><input type="checkbox" checked={form.daily} onChange={(event) => setForm({ ...form, daily: event.target.checked })} />每日任务</label>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, color: "#475569" }}><input type="checkbox" checked={form.daily} onChange={(event) => setForm({ ...form, daily: event.target.checked })} />重复任务</label>
               <button style={styles.primary} onClick={addTask}><Plus size={16} />添加</button>
             </div>
+            {form.daily && (
+              <div style={{ marginTop: 12, padding: 12, border: "1px solid #e2e8f0", borderRadius: 16, background: "#fbfdff" }}>
+                <div style={{ fontWeight: 700, marginBottom: 8 }}>选择每周重复日期</div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                  {allWeekdayIndexes.map((day) => {
+                    const active = (form.repeatDays || []).includes(day);
+                    return (
+                      <button
+                        key={day}
+                        type="button"
+                        onClick={() => toggleRepeatDay(day)}
+                        style={{
+                          border: "none",
+                          borderRadius: 12,
+                          padding: "8px 12px",
+                          fontSize: 13,
+                          fontWeight: 700,
+                          cursor: "pointer",
+                          background: active ? "#172033" : "#e2e8f0",
+                          color: active ? "#fff" : "#334155",
+                        }}
+                      >
+                        {weekdays[day]}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div style={{ color: "#64748b", fontSize: 13, marginTop: 8 }}>
+                  只在选中的星期出现；每个出现日期都可以单独勾选完成。
+                </div>
+              </div>
+            )}
             <div style={{ marginTop: 12 }}><textarea style={styles.textarea} placeholder={"细分任务：一行写一个，例如\n改引言\n补注释\n检查参考文献"} value={form.subtasksText} onChange={(event) => setForm({ ...form, subtasksText: event.target.value })} /></div>
           </section>
 
           <section style={styles.card}>
-            <div style={styles.sectionHeader}><div><h2 style={styles.sectionTitle}>选择日期</h2><p style={styles.sectionText}>普通任务从规划开始显示到截止日。每日任务每天独立完成。</p></div><div style={styles.dayButtons}>{planningDays.map((day) => <button key={day} onClick={() => setSelectedDate(day)} style={{ ...styles.dayButton, background: selectedDate === day ? "#172033" : "#e2e8f0", color: selectedDate === day ? "#fff" : "#334155" }}>{formatDate(day)}</button>)}</div></div>
+            <div style={styles.sectionHeader}><div><h2 style={styles.sectionTitle}>选择日期</h2><p style={styles.sectionText}>普通任务从规划开始显示到截止日。重复任务只在选中的周几出现，并按日期独立完成。</p></div><div style={styles.dayButtons}>{planningDays.map((day) => <button key={day} onClick={() => setSelectedDate(day)} style={{ ...styles.dayButton, background: selectedDate === day ? "#172033" : "#e2e8f0", color: selectedDate === day ? "#fff" : "#334155" }}>{formatDate(day)}</button>)}</div></div>
           </section>
 
           <QuadrantChart dateISO={selectedDate} tasks={tasks} onToggleDone={toggleDone} onRemove={removeTask} onOpenTask={setSelectedTaskId} />
